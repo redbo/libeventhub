@@ -1,0 +1,5 @@
+This is an experimental hub for eventlet based on libevent, written with cython.
+
+*  http://eventlet.net/
+*  http://www.monkey.org/~provos/libevent/
+*  http://www.cython.org/
