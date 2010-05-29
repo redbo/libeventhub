@@ -21,16 +21,16 @@ cdef extern from "sys/time.h":
 
 
 cdef extern from "event.h":
-    struct event_t "event":
+    struct event:
         pass
     struct event_base:
         pass
-    int event_add(event_t *ev, timeval *tv)
-    int event_del(event_t *ev)
-    int event_pending(event_t *ev, short, timeval *tv)
-    void event_set(event_t *ev, int fd, short event,
+    int event_add(event *ev, timeval *tv)
+    int event_del(event *ev)
+    int event_pending(event *ev, short, timeval *tv)
+    void event_set(event *ev, int fd, short event,
                    void (*handler)(int fd, short evtype, void *arg), void *arg)
-    int event_base_set(event_base *base, event_t *evt)
+    int event_base_set(event_base *base, event *evt)
     int event_base_loop(event_base *base, int loop) nogil
     int event_base_loopbreak(event_base *base)
     int event_base_free(event_base *base)
@@ -75,7 +75,7 @@ cdef class Event:
     cdef public object fileno, evtype
     cdef object _caller, _callback, _args, _kwargs
     cdef int _cancelled
-    cdef event_t _ev
+    cdef event _ev
     cdef Base _base
 
     def __init__(self, Base base, callback, args=(), kwargs={}, evtype=0,
