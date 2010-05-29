@@ -104,7 +104,7 @@ cdef class Event:
         Py_INCREF(self)
 
     def __call__(self):
-        if not self._cancelled and (not self._caller or not self.caller.dead):
+        if not self._cancelled and (not self._caller or not self._caller.dead):
             try:
                 self._callback(*self._args, **self._kwargs)
             except Exception:
