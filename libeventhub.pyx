@@ -57,17 +57,19 @@ cdef class Base:
         with nogil:
             event_base_loop(self._base, EVLOOP_ONCE)
         if self._exc:
-            exc = self._exc[0], self._exc[1], self._exc[2]
+            exc = self._exc
             self._exc = None
-            raise exc
+            raise exc[0], exc[1], exc[2]
 
     def add_event(self, callback, args=(), kwargs={}, evtype=0, fileno=-1,
                  caller=None, timeout=None):
         return Event(self, callback, args, kwargs, evtype, fileno, caller, timeout)
 
     def raise_error(self):
-        self._exc = sys.exc_info()
-        event_base_loopbreak(self._base)
+        exc = sys.exc_info()
+        if any(exc):
+            self._exc = exc
+            event_base_loopbreak(self._base)
 
 
 cdef class Event:
@@ -107,7 +109,7 @@ cdef class Event:
             if not self._caller or not self._caller.dead:
                 try:
                     self._callback(*self._args, **self._kwargs)
-                except Exception:
+                except BaseException:
                     self._base.raise_error()
             self.cancel()
 
