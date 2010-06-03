@@ -44,20 +44,22 @@ cdef void _event_cb(int fd, short evtype, void *arg) with gil:
 
 
 cdef class Base:
-    cdef event_base *base
+    cdef event_base *_base
     cdef object _exc
 
-    def __init__(self):
-        self._exc = None
-        self.base = event_base_new()
+    def __cinit__(self, *args, **kwargs):
+        self._base = event_base_new()
+
+    def __dealloc__(self):
+        event_base_free(self._base)
 
     def dispatch(self):
         with nogil:
-            event_base_loop(self.base, EVLOOP_ONCE)
+            event_base_loop(self._base, EVLOOP_ONCE)
         if self._exc:
-            t = self._exc
+            exc = self._exc[0], self._exc[1], self._exc[2]
             self._exc = None
-            raise t[0], t[1], t[2]
+            raise exc
 
     def add_event(self, callback, args=(), kwargs={}, evtype=0, fileno=-1,
                  caller=None, timeout=None):
@@ -65,10 +67,7 @@ cdef class Base:
 
     def raise_error(self):
         self._exc = sys.exc_info()
-        event_base_loopbreak(self.base)
-
-    def __dealloc__(self):
-        event_base_free(self.base)
+        event_base_loopbreak(self._base)
 
 
 cdef class Event:
@@ -94,7 +93,7 @@ cdef class Event:
         elif evtype is hub.READ:
             evtype = EV_READ
         event_set(&self._ev, fileno, evtype, _event_cb, <void *>self)
-        event_base_set(base.base, &self._ev)
+        event_base_set(base._base, &self._ev)
         if timeout is None:
             event_add(&self._ev, NULL)
         else:
@@ -104,35 +103,35 @@ cdef class Event:
         Py_INCREF(self)
 
     def __call__(self):
-        if not self._cancelled and (not self._caller or not self._caller.dead):
-            try:
-                self._callback(*self._args, **self._kwargs)
-            except Exception:
-                self._base.raise_error()
-        self.cancel()
+        if not self._cancelled:
+            if not self._caller or not self._caller.dead:
+                try:
+                    self._callback(*self._args, **self._kwargs)
+                except Exception:
+                    self._base.raise_error()
+            self.cancel()
 
     def cancel(self):
         if not self._cancelled:
-            event_del(&self._ev)
             Py_DECREF(self)
+            event_del(&self._ev)
             self._cancelled = 1
 
     def __dealloc__(self):
-        if not self._cancelled:
-            self.cancel()
+        event_del(&self._ev)
 
 
 class Hub(hub.BaseHub):
     def __init__(self):
         super(Hub,self).__init__()
-        self.base = Base()
-        self.base.add_event(self.greenlet.parent.throw, (KeyboardInterrupt,),
+        self._base = Base()
+        self._base.add_event(self.greenlet.parent.throw, (KeyboardInterrupt,),
                 evtype=EV_SIGNAL, fileno=2)
 
     def run(self):
         while True:
             try:
-                self.base.dispatch()
+                self._base.dispatch()
             except self.SYSTEM_EXCEPTIONS:
                 raise
             except greenlet.GreenletExit:
@@ -156,7 +155,7 @@ class Hub(hub.BaseHub):
     running = property(_get_running, _set_running)
 
     def add(self, evtype, fileno, cb):
-        evt = self.base.add_event(cb, (fileno,), evtype=evtype, fileno=fileno)
+        evt = self._base.add_event(cb, (fileno,), evtype=evtype, fileno=fileno)
         bucket = self.listeners[evtype]
         if fileno in bucket:
             if hub.g_prevent_multiple_readers:
@@ -189,10 +188,10 @@ class Hub(hub.BaseHub):
         current = greenlet.getcurrent()
         if current is self.greenlet:
             return self.schedule_call_global(seconds, cb, *args, **kwargs)
-        return self.base.add_event(cb, args, kwargs, evtype=EV_TIMEOUT,
+        return self._base.add_event(cb, args, kwargs, evtype=EV_TIMEOUT,
                     caller=current, timeout=seconds)
 
     def schedule_call_global(self, seconds, cb, *args, **kwargs):
-        return self.base.add_event(cb, args, kwargs, evtype=EV_TIMEOUT,
+        return self._base.add_event(cb, args, kwargs, evtype=EV_TIMEOUT,
                     timeout=seconds)
 
