@@ -1,11 +1,3 @@
-"""
-libeventhub
-
-An experimental libevent-based hub for eventlet.
-
-http://github.com/redbo/libeventhub
-"""
-
 import sys
 import traceback
 
@@ -13,20 +5,20 @@ from eventlet.support import greenlets as greenlet
 from eventlet.hubs import hub
 
 
-cdef extern from "Python.h":
+cdef extern from 'Python.h':
     void Py_INCREF(object o)
     void Py_DECREF(object o)
 
 
-cdef extern from "sys/time.h":
-    ctypedef int time_t
-    ctypedef int suseconds_t
+cdef extern from 'sys/time.h':
+    ctypedef long time_t
+    ctypedef long suseconds_t
     struct timeval:
         time_t tv_sec
         suseconds_t tv_usec
 
 
-cdef extern from "event.h":
+cdef extern from 'event.h':
     struct event:
         pass
     struct event_base:
@@ -163,7 +155,7 @@ class Hub(hub.BaseHub):
         bucket = self.listeners[evtype]
         if fileno in bucket:
             if hub.g_prevent_multiple_readers:
-                (<Event>evt).cancel()
+                <Event>evt.cancel()
                 raise RuntimeError("Second simultaneous %s on fileno %s "\
                      "detected.  Unless you really know what you're doing, "\
                      "make sure that only one greenthread can %s any "\
@@ -182,7 +174,7 @@ class Hub(hub.BaseHub):
             listener = lcontainer.pop(fileno, None)
             if listener:
                 try:
-                    (<Event>listener).cancel()
+                    <Event>listener.cancel()
                 except self.SYSTEM_EXCEPTIONS:
                     raise
                 except:
