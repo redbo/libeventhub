@@ -1,5 +1,9 @@
 """
-This is a docstring.
+libeventhub
+
+An experimental libevent-based hub for eventlet.
+
+http://github.com/redbo/libeventhub
 """
 
 import sys
@@ -15,9 +19,11 @@ cdef extern from "Python.h":
 
 
 cdef extern from "sys/time.h":
+    ctypedef int time_t
+    ctypedef int suseconds_t
     struct timeval:
-        unsigned int tv_sec
-        unsigned int tv_usec
+        time_t tv_sec
+        suseconds_t tv_usec
 
 
 cdef extern from "event.h":
@@ -39,7 +45,7 @@ cdef extern from "event.h":
 
 
 cdef void _event_cb(int fd, short evtype, void *arg) with gil:
-    (<object>arg)()
+    (<Event>arg).callback()
 
 
 cdef class Base:
@@ -61,25 +67,24 @@ cdef class Base:
             raise exc[0], exc[1], exc[2]
 
     def add_event(self, callback, args=(), kwargs={}, evtype=0, fileno=-1,
-                 caller=None, timeout=None):
+                 caller=None, timeout=-1.0):
         return Event(self, callback, args, kwargs, evtype, fileno, caller, timeout)
 
     def raise_error(self):
-        exc = sys.exc_info()
-        if any(exc):
-            self._exc = exc
-            event_base_loopbreak(self._base)
+        self._exc = sys.exc_info()
+        event_base_loopbreak(self._base)
 
 
 cdef class Event:
-    cdef public object fileno, evtype
+    cdef public int fileno
+    cdef public object evtype
     cdef object _caller, _callback, _args, _kwargs
     cdef int _cancelled
     cdef event _ev
     cdef Base _base
 
-    def __init__(self, Base base, callback, args=(), kwargs={}, evtype=0,
-                 fileno=-1, caller=None, timeout=None):
+    def __init__(self, Base base, callback, args, kwargs, evtype, int fileno,
+                 caller, float timeout):
         cdef timeval tv
         self.fileno = fileno
         self.evtype = evtype
@@ -95,15 +100,15 @@ cdef class Event:
             evtype = EV_READ
         event_set(&self._ev, fileno, evtype, _event_cb, <void *>self)
         event_base_set(base._base, &self._ev)
-        if timeout is None:
+        if timeout < 0.0:
             event_add(&self._ev, NULL)
         else:
-            tv.tv_sec = <long>timeout
-            tv.tv_usec = <unsigned int>((timeout - <float>tv.tv_sec) * 1000000.0)
+            tv.tv_sec = <time_t>timeout
+            tv.tv_usec = <suseconds_t>((timeout - <time_t>timeout) * 1000000.0)
             event_add(&self._ev, &tv)
         Py_INCREF(self)
 
-    def __call__(self):
+    cdef callback(self):
         if not self._cancelled:
             if not self._caller or not self._caller.dead:
                 try:
@@ -112,7 +117,7 @@ cdef class Event:
                     self._base.raise_error()
             self.cancel()
 
-    def cancel(self):
+    cpdef cancel(self):
         if not self._cancelled:
             event_del(&self._ev)
             self._cancelled = 1
@@ -123,13 +128,13 @@ class Hub(hub.BaseHub):
     def __init__(self):
         super(Hub,self).__init__()
         self._base = Base()
-        self._base.add_event(self.greenlet.parent.throw, (KeyboardInterrupt,),
-                evtype=EV_SIGNAL, fileno=2)
+        <Base>(self._base).add_event(self.greenlet.parent.throw,
+                (KeyboardInterrupt,), evtype=EV_SIGNAL, fileno=2)
 
     def run(self):
         while True:
             try:
-                self._base.dispatch()
+                <Base>(self._base).dispatch()
             except self.SYSTEM_EXCEPTIONS:
                 raise
             except greenlet.GreenletExit:
@@ -153,11 +158,12 @@ class Hub(hub.BaseHub):
     running = property(_get_running, _set_running)
 
     def add(self, evtype, fileno, cb):
-        evt = self._base.add_event(cb, (fileno,), evtype=evtype, fileno=fileno)
+        evt = <Base>(self._base).add_event(cb, (fileno,), evtype=evtype,
+                     fileno=fileno)
         bucket = self.listeners[evtype]
         if fileno in bucket:
             if hub.g_prevent_multiple_readers:
-                evt.cancel()
+                (<Event>evt).cancel()
                 raise RuntimeError("Second simultaneous %s on fileno %s "\
                      "detected.  Unless you really know what you're doing, "\
                      "make sure that only one greenthread can %s any "\
@@ -176,7 +182,7 @@ class Hub(hub.BaseHub):
             listener = lcontainer.pop(fileno, None)
             if listener:
                 try:
-                    listener.cancel()
+                    (<Event>listener).cancel()
                 except self.SYSTEM_EXCEPTIONS:
                     raise
                 except:
@@ -186,10 +192,10 @@ class Hub(hub.BaseHub):
         current = greenlet.getcurrent()
         if current is self.greenlet:
             return self.schedule_call_global(seconds, cb, *args, **kwargs)
-        return self._base.add_event(cb, args, kwargs, evtype=EV_TIMEOUT,
-                    caller=current, timeout=seconds)
+        return <Base>(self._base).add_event(cb, args, kwargs,
+                evtype=EV_TIMEOUT, caller=current, timeout=seconds)
 
     def schedule_call_global(self, seconds, cb, *args, **kwargs):
-        return self._base.add_event(cb, args, kwargs, evtype=EV_TIMEOUT,
-                    timeout=seconds)
+        return <Base>(self._base).add_event(cb, args, kwargs,
+                evtype=EV_TIMEOUT, timeout=seconds)
 
