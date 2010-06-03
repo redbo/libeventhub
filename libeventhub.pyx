@@ -103,12 +103,11 @@ cdef class Event:
         Py_INCREF(self)
 
     def __call__(self):
-        if not self._cancelled:
-            if not self._caller or not self._caller.dead:
-                try:
-                    self._callback(*self._args, **self._kwargs)
-                except Exception:
-                    self._base.raise_error()
+        if not self._cancelled and (not self._caller or not self._caller.dead):
+            try:
+                self._callback(*self._args, **self._kwargs)
+            except Exception:
+                self._base.raise_error()
             self.cancel()
 
     def cancel(self):
@@ -116,9 +115,6 @@ cdef class Event:
             Py_DECREF(self)
             event_del(&self._ev)
             self._cancelled = 1
-
-    def __dealloc__(self):
-        event_del(&self._ev)
 
 
 class Hub(hub.BaseHub):

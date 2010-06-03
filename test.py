@@ -1,4 +1,4 @@
-from eventlet import hubs, wsgi, listen, tpool
+from eventlet import hubs, wsgi, listen, tpool, Timeout
 from eventlet.green.urllib2 import urlopen
 
 import libeventhub
@@ -9,7 +9,8 @@ def read_somethingelse():
 
 def hello_world(env, start_response):
     if env['PATH_INFO'] == '/':
-        content = tpool.execute(read_somethingelse)
+        with Timeout(300):
+            content = tpool.execute(read_somethingelse)
     else:
         content = 'oh hai'
     start_response('200 OK', [('Content-Type', 'text/plain'),
