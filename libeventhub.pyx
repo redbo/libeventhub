@@ -27,7 +27,6 @@ cdef extern from "event.h":
         pass
     int event_add(event *ev, timeval *tv)
     int event_del(event *ev)
-    int event_pending(event *ev, short, timeval *tv)
     void event_set(event *ev, int fd, short event,
                    void (*handler)(int fd, short evtype, void *arg), void *arg)
     int event_base_set(event_base *base, event *evt)
