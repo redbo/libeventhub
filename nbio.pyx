@@ -37,7 +37,6 @@ cdef struct file_operation:
 
 
 cdef void *fd_operate(file_operation *op):
-    cdef long _write_response
     if op.op == 1:
         op.response = write(op.fd, op.buf, op.length)
     elif op.op == 2:
@@ -51,7 +50,7 @@ cdef void *fd_operate(file_operation *op):
     elif op.op == 6:
         op.response = posix_fadvise(op.fd, op.offset, op.length,
                 POSIX_FADV_DONTNEED)
-    _write_response = write(op.response_writer, "!", 1)
+    cdef long _write_response = write(op.response_writer, "!", 1)
     return op
 
 
@@ -73,6 +72,7 @@ cdef _file_op(int file_op, int fd, char *buf=NULL, long length=0, long offset=0)
         close(response_reader)
         close(response_writer)
 
+# TODO raise errors
 
 def disk_write(fd, buf):
     return _file_op(1, fd, buf, len(buf))
@@ -100,4 +100,7 @@ def disk_fallocate(fd, length):
 
 def disk_drop_cache(fd, offset, length):
     return _file_op(6, fd, NULL, length, offset)
+
+__all__ = ['disk_write', 'disk_read', 'disk_fsync', 'disk_fdatasync',
+           'disk_fallocate', 'disk_drop_cache']
 
