@@ -24,6 +24,7 @@ cdef extern from 'pthread.h':
     ctypedef long pthread_attr_t
     int pthread_create(pthread_t *thread, pthread_attr_t *attr,
                 void *(*start_routine)(void*), void *arg)
+    int pthread_join(pthread_t thread, void **value_ptr)
 
 
 cdef struct file_operation:
@@ -50,27 +51,23 @@ cdef void *fd_operate(file_operation *op):
     elif op.op == 6:
         op.response = posix_fadvise(op.fd, op.offset, op.length,
                 POSIX_FADV_DONTNEED)
-    cdef long _write_response = write(op.response_writer, "!", 1)
-    return op
+    close(op.response_writer)
 
 
 cdef _file_op(int file_op, int fd, char *buf=NULL, long length=0, long offset=0):
     cdef file_operation op
     cdef pthread_t thrd
-    response_reader, response_writer = os.pipe()
-    try:
-        op.response_writer = response_writer
-        op.fd = fd
-        op.op = file_op
-        op.buf = buf
-        op.length = length
-        op.offset = offset
-        pthread_create(&thrd, NULL, <void *(*)(void*)>&fd_operate, <void *>&op)
-        trampoline(response_reader, read=True)
-        return op.response
-    finally:
-        close(response_reader)
-        close(response_writer)
+    response_reader, op.response_writer = os.pipe()
+    op.fd = fd
+    op.op = file_op
+    op.buf = buf
+    op.length = length
+    op.offset = offset
+    pthread_create(&thrd, NULL, <void *(*)(void*)>&fd_operate, <void *>&op)
+    trampoline(response_reader, read=True)
+    close(response_reader)
+    pthread_join(thrd, NULL)
+    return op.response
 
 # TODO raise errors
 

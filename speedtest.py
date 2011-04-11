@@ -16,11 +16,11 @@ import libeventhub
 import nbio
 
 
-# hubs.use_hub(libeventhub)
+hubs.use_hub(libeventhub)
 
 READ_AMOUNT = (1024 ** 3)
 
-def read_file(desc, mode):
+def read_file(mode):
     start = time.time()
     fd = os.open('/dev/zero', 0)
     read_amount = 0
@@ -32,9 +32,8 @@ def read_file(desc, mode):
         elif mode == 2:
             chunk = nbio.disk_read(fd, 65536)
         read_amount += len(chunk)
-    print "%-20s %5.3f" % (desc, time.time() - start)
+    print "%5.3f seconds" % (time.time() - start)
 
-read_file("normal read", 0)
-read_file("libeventhub", 2)
-read_file("tpool", 1)
+for x in xrange(5):
+    read_file(2)
 
