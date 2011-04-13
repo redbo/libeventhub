@@ -1,7 +1,6 @@
-import os
-import time
+import os, time
 
-def read_file():
+for x in xrange(3):
     start = time.time()
     fd = os.open('/dev/zero', 0)
     read_amount = 0
@@ -9,6 +8,4 @@ def read_file():
         read_amount += len(os.read(fd, 32768)) # 32kb
     print (time.time() - start), "seconds"
 
-for x in xrange(3):
-    read_file()
 

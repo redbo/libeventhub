@@ -24,11 +24,11 @@ cdef extern from 'unistd.h':
 
 cdef extern from 'pthread.h':
     ctypedef long pthread_mutex_t
+    ctypedef long pthread_t
+    ctypedef long pthread_attr_t
     void pthread_mutex_init(pthread_mutex_t *, void *arg) nogil
     void pthread_mutex_lock(pthread_mutex_t *) nogil
     void pthread_mutex_unlock(pthread_mutex_t *) nogil
-    ctypedef long pthread_t
-    ctypedef long pthread_attr_t
     int pthread_create(pthread_t *thread, pthread_attr_t *attr,
                 void *(*start_routine)(void*), void *arg) nogil
     int pthread_join(pthread_t thread, void **value_ptr) nogil
@@ -138,6 +138,10 @@ def disk_fallocate(fd, length):
 
 def disk_drop_cache(fd, offset, length):
     return _file_op(6, fd, NULL, length, offset)
+
+
+def disk_listdir(path):
+    pass
 
 
 __all__ = ['disk_write', 'disk_read', 'disk_fsync', 'disk_fdatasync',
