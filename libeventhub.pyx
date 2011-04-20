@@ -107,8 +107,8 @@ cdef class Event:
 
     cpdef cancel(self):
         if not self._cancelled:
-            event_del(&self._ev)
             self._cancelled = 1
+            event_del(&self._ev)
             Py_DECREF(self)
 
 
