@@ -23,15 +23,15 @@ cdef extern from 'event.h':
         pass
     struct event_base:
         pass
-    int event_add(event *ev, timeval *tv)
-    int event_del(event *ev)
+    int event_add(event *ev, timeval *tv) nogil
+    int event_del(event *ev) nogil
     void event_set(event *ev, int fd, short event,
-                   void (*handler)(int fd, short evtype, void *arg), void *arg)
-    int event_base_set(event_base *base, event *evt)
+           void (*handler)(int fd, short evtype, void *arg), void *arg) nogil
+    int event_base_set(event_base *base, event *evt) nogil
     int event_base_loop(event_base *base, int loop) nogil
-    int event_base_loopbreak(event_base *base)
-    int event_base_free(event_base *base)
-    event_base *event_base_new()
+    int event_base_loopbreak(event_base *base) nogil
+    int event_base_free(event_base *base) nogil
+    event_base *event_base_new() nogil
 
     int EV_READ, EV_WRITE, EV_SIGNAL, EV_TIMEOUT
 
@@ -154,4 +154,20 @@ class Hub(hub.BaseHub):
 
     def schedule_call_global(self, seconds, cb, *args, **kwargs):
         return Event(self, cb, args, kwargs, EV_TIMEOUT, -1, None, seconds)
+
+    def remove(self, listener):
+        "This hub doesn't track listeners"
+        pass
+
+    def _implement_later(self, *args, **kwargs):
+        raise NotImplementedError("I haven't implemented this method yet.")
+    block_detect_pre = block_detect_post = timer_canceled = _implement_later
+
+    def _unimplemented(self, *args, **kwargs):
+        raise NotImplementedError("I felt this method didn't make sense for"
+                " this hub.")
+    remove_descriptor = squelch_exception = wait = sleep_until = \
+        default_sleep = add_timer = prepare_timers = fire_timers = \
+        get_readers = get_writers = get_timers_count = \
+        set_debug_listeners = _unimplemented
 
