@@ -6,8 +6,8 @@ from eventlet.hubs import hub
 
 
 cdef extern from 'Python.h':
-    void Py_INCREF(object o)
-    void Py_DECREF(object o)
+    void Py_INCREF(object)
+    void Py_DECREF(object)
 
 
 cdef extern from 'sys/time.h':
@@ -20,24 +20,25 @@ cdef extern from 'sys/time.h':
 
 cdef extern from 'event.h':
     struct event:
-        pass
+        pass # this is okay as an opaque pointer
     struct event_base:
-        pass
-    int event_add(event *ev, timeval *tv) nogil
-    int event_del(event *ev) nogil
-    void event_set(event *ev, int fd, short event,
-           void (*handler)(int fd, short evtype, void *arg), void *arg) nogil
-    int event_base_set(event_base *base, event *evt) nogil
-    int event_base_loop(event_base *base, int loop) nogil
-    int event_base_loopbreak(event_base *base) nogil
-    int event_base_free(event_base *base) nogil
-    event_base *event_base_new() nogil
+        pass # this is okay as an opaque pointer
+    int event_add(event *, timeval *)
+    int event_del(event *)
+    void event_set(event *, int, short, void (*)(int, short, void *), void *)
+    int event_base_set(event_base *, event *)
+    int event_base_loopbreak(event_base *)
+    int event_base_free(event_base *)
+    int event_base_loop(event_base *, int) nogil
+    event_base *event_base_new()
 
     int EV_READ, EV_WRITE, EV_SIGNAL, EV_TIMEOUT
 
 
 cdef void _event_cb(int fd, short evtype, void *arg) with gil:
+    print "callbacking"
     (<Event>arg).callback()
+    print "/callbacking"
 
 
 cdef class Base:
@@ -78,20 +79,24 @@ cdef class Event:
         self._args = args
         self._kwargs = kwargs
         self._caller = caller
-        self._cancelled = 0
         if evtype is hub.WRITE:
             evtype = EV_WRITE
         elif evtype is hub.READ:
             evtype = EV_READ
         event_set(&self._ev, fileno, evtype, _event_cb, <void *>self)
-        (<Base>hub._base).add_event(&self._ev)
+        if not (<Base>hub._base).add_event(&self._ev):
+            self._cancelled = 0
+            hub.pending_events.add(self)
+            Py_INCREF(self) # libevent hub is now holding a reference to me
+        else:
+            self._cancelled = 1
+            raise RuntimeError("Unable to add event to base.")
         if timeout >= 0.0:
             tv.tv_sec = <time_t>timeout
             tv.tv_usec = <suseconds_t>((timeout - <time_t>timeout) * 1000000.0)
             ptv = &tv
         if event_add(&self._ev, ptv):
             raise RuntimeError("Unable to add event %s on fileno %d" % (evtype, fileno))
-        Py_INCREF(self) # libevent is now holding a reference to this object
         (<Base>hub._base).loopbreak()
 
     cdef callback(self):
@@ -103,11 +108,15 @@ cdef class Event:
                     self._hub.raise_error()
             self.cancel()
 
-    cpdef cancel(self):
+    def cancel(self):
         if not self._cancelled:
             self._cancelled = 1
             event_del(&self._ev)
-            Py_DECREF(self)
+            self._hub.pending_events.remove(self)
+            Py_DECREF(self) # libevent should no longer be holding a reference
+
+    def __hash__(self):
+        return <long>&self._ev
 
 
 class Hub(hub.BaseHub):
@@ -117,6 +126,10 @@ class Hub(hub.BaseHub):
         self._kbint = Event(self, self.greenlet.parent.throw,
                 (KeyboardInterrupt,), {}, EV_SIGNAL, 2, None, -1.0)
         self._exc = None
+        self.pending_events = set()
+
+    def __dealloc__(self):
+        print "Dealocating hub"
 
     def run(self):
         while True:
@@ -139,7 +152,7 @@ class Hub(hub.BaseHub):
         self.schedule_call_global(0, self.greenlet.throw, greenlet.GreenletExit)
         if wait:
             assert self.greenlet is not greenlet.getcurrent(), \
-                "Can't abort with wait from inside the hub's greenlet."
+                "Can't abort with wait from inside the hub's greenlet"
             self.switch()
         (<Base>self._base).loopbreak()
 
@@ -160,12 +173,11 @@ class Hub(hub.BaseHub):
         pass
 
     def _implement_later(self, *args, **kwargs):
-        raise NotImplementedError("I haven't implemented this method yet.")
+        raise NotImplementedError("I haven't implemented this method yet")
     block_detect_pre = block_detect_post = timer_canceled = _implement_later
 
     def _unimplemented(self, *args, **kwargs):
-        raise NotImplementedError("I felt this method didn't make sense for"
-                " this hub.")
+        raise NotImplementedError("This method didn't make sense for this hub")
     remove_descriptor = squelch_exception = wait = sleep_until = \
         default_sleep = add_timer = prepare_timers = fire_timers = \
         get_readers = get_writers = get_timers_count = \
