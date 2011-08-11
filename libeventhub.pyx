@@ -86,7 +86,6 @@ cdef class Event:
         event_set(&self._ev, fileno, evtype, _event_cb, <void *>self)
         if not (<Base>hub._base).add_event(&self._ev):
             self._cancelled = 0
-            hub.pending_events.add(self)
             Py_INCREF(self) # libevent hub is now holding a reference to me
         else:
             self._cancelled = 1
@@ -112,7 +111,6 @@ cdef class Event:
         if not self._cancelled:
             self._cancelled = 1
             event_del(&self._ev)
-            self._hub.pending_events.remove(self)
             Py_DECREF(self) # libevent should no longer be holding a reference
 
     def __hash__(self):
@@ -126,10 +124,6 @@ class Hub(hub.BaseHub):
         self._kbint = Event(self, self.greenlet.parent.throw,
                 (KeyboardInterrupt,), {}, EV_SIGNAL, 2, None, -1.0)
         self._exc = None
-        self.pending_events = set()
-
-    def __dealloc__(self):
-        print "Dealocating hub"
 
     def run(self):
         while True:
