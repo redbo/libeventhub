@@ -33,6 +33,7 @@ cdef extern from 'event.h':
     event_base *event_base_new()
 
     int EV_READ, EV_WRITE, EV_SIGNAL, EV_TIMEOUT
+    int EVLOOP_ONCE
 
 
 cdef void _event_cb(int fd, short evtype, void *arg) with gil:
@@ -56,7 +57,7 @@ cdef class Base:
 
     cdef loop(self):
         with nogil:
-            event_base_loop(self._base, 0)
+            event_base_loop(self._base, EVLOOP_ONCE)
 
     cdef loopbreak(self):
         event_base_loopbreak(self._base)
@@ -84,17 +85,18 @@ cdef class Event:
         elif evtype is hub.READ:
             evtype = EV_READ
         event_set(&self._ev, fileno, evtype, _event_cb, <void *>self)
-        if not (<Base>hub._base).add_event(&self._ev):
-            self._cancelled = 0
-            Py_INCREF(self) # libevent hub is now holding a reference to me
-        else:
-            self._cancelled = 1
-            raise RuntimeError("Unable to add event to base.")
         if timeout >= 0.0:
             tv.tv_sec = <time_t>timeout
             tv.tv_usec = <suseconds_t>((timeout - <time_t>timeout) * 1000000.0)
             ptv = &tv
+        if not (<Base>hub._base).add_event(&self._ev):
+            self._cancelled = 0
+            Py_INCREF(self) # libevent base is now holding a pointer to me
+        else:
+            self._cancelled = 1
+            raise RuntimeError("Unable to add event to base.")
         if event_add(&self._ev, ptv):
+            self.cancel()
             raise RuntimeError("Unable to add event %s on fileno %d" % (evtype, fileno))
         (<Base>hub._base).loopbreak()
 
@@ -126,6 +128,7 @@ class Hub(hub.BaseHub):
         self._exc = None
 
     def run(self):
+        x = self.greenlet # wtfbbq
         while True:
             (<Base>self._base).loop()
             if self._exc:
