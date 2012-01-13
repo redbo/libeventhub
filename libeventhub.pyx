@@ -37,14 +37,11 @@ cdef extern from 'event.h':
 
 
 cdef void _event_cb(int fd, short evtype, void *arg) with gil:
-    print "callbacking"
     (<Event>arg).callback()
-    print "/callbacking"
 
 
 cdef class Base:
     cdef event_base *_base
-    cdef object _exc
 
     def __cinit__(self, *args, **kwargs):
         self._base = event_base_new()
@@ -128,7 +125,7 @@ class Hub(hub.BaseHub):
         self._exc = None
 
     def run(self):
-        x = self.greenlet # wtfbbq
+        # x = self.greenlet # wtfbbq
         while True:
             (<Base>self._base).loop()
             if self._exc:
@@ -164,19 +161,4 @@ class Hub(hub.BaseHub):
 
     def schedule_call_global(self, seconds, cb, *args, **kwargs):
         return Event(self, cb, args, kwargs, EV_TIMEOUT, -1, None, seconds)
-
-    def remove(self, listener):
-        "This hub doesn't track listeners"
-        pass
-
-    def _implement_later(self, *args, **kwargs):
-        raise NotImplementedError("I haven't implemented this method yet")
-    block_detect_pre = block_detect_post = timer_canceled = _implement_later
-
-    def _unimplemented(self, *args, **kwargs):
-        raise NotImplementedError("This method didn't make sense for this hub")
-    remove_descriptor = squelch_exception = wait = sleep_until = \
-        default_sleep = add_timer = prepare_timers = fire_timers = \
-        get_readers = get_writers = get_timers_count = \
-        set_debug_listeners = _unimplemented
 
