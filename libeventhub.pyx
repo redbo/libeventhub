@@ -1,28 +1,29 @@
 import sys
 import traceback
 
-from eventlet.support import greenlets as greenlet
-from eventlet.hubs import hub
+from eventlet.support import greenlets
+from eventlet.hubs.hub import BaseHub, READ, WRITE
 
 
-cdef extern from 'Python.h':
+cdef extern from "Python.h":
     void Py_INCREF(object)
     void Py_DECREF(object)
 
+ctypedef void (*event_handler)(int fd, short evtype, void *arg)
 
 cdef extern from 'sys/time.h':
-    ctypedef long time_t
-    ctypedef long suseconds_t
     struct timeval:
-        time_t tv_sec
-        suseconds_t tv_usec
+        unsigned long tv_sec
+        unsigned long tv_usec
 
-
-cdef extern from 'event.h':
-    struct event:
-        pass # this is okay as an opaque pointer
+cdef extern from "event.h":
     struct event_base:
-        pass # this is okay as an opaque pointer
+        pass
+    struct event:
+        pass
+
+    void evtimer_set(event *ev, event_handler handler, void *arg)
+    int event_pending(event *ev, short, timeval *tv)
     int event_add(event *, timeval *)
     int event_del(event *)
     void event_set(event *, int, short, void (*)(int, short, void *), void *)
@@ -32,133 +33,210 @@ cdef extern from 'event.h':
     int event_base_loop(event_base *, int) nogil
     event_base *event_base_new()
 
-    int EV_READ, EV_WRITE, EV_SIGNAL, EV_TIMEOUT
-    int EVLOOP_ONCE
+    int EVLOOP_ONCE, EVLOOP_NONBLOCK
+    int EV_TIMEOUT, EV_READ, EV_WRITE, EV_SIGNAL, EV_PERSIST
+
+cdef void event_callback(int fd, short evtype, void *arg) with gil:
+    (<object>arg)()
+
+cdef class Event:
+    cdef event ev
+    cdef public object fileno, cb
+    cdef object args, _evtype
+    cdef public object seconds, hub
+    cdef timeval tv
+
+    def __init__(self, callback, arg=None, short evtype=0, fileno=-1,
+                 seconds=None, hub=None):
+        self.cb = callback
+        self.args = arg
+        self._evtype = evtype
+        self.fileno = fileno
+        self.seconds = seconds
+        self.hub = hub
+        if evtype == 0 and not fileno:
+            evtimer_set(&self.ev, event_callback, <void *>self)
+        else:
+            event_set(&self.ev, fileno, evtype, event_callback, <void *>self)
+
+    def __call__(self):
+        try:
+            if self.cb(*self.args) != None:
+                if self.tv.tv_sec or self.tv.tv_usec:
+                    event_add(&self.ev, &self.tv)
+                else:
+                    event_add(&self.ev, NULL)
+        except:
+            self.hub.async_exception_occurred()
+        if not (self._evtype & EV_SIGNAL) and not self.pending():
+            Py_DECREF(self)
+
+    def add(self):
+        if not self.pending():
+            Py_INCREF(self)
+        if self.seconds is not None:
+            self.tv.tv_sec = <unsigned long>self.seconds
+            self.tv.tv_usec = <unsigned long>((<double>self.seconds -
+                        <double>self.tv.tv_sec) * 1000000.0)
+            event_add(&self.ev, &self.tv)
+        else:
+            self.tv.tv_sec = self.tv.tv_usec = 0
+            event_add(&self.ev, NULL)
+        self.seconds = None
+
+    def pending(self):
+        return event_pending(&self.ev, EV_TIMEOUT | EV_SIGNAL | EV_READ | EV_WRITE, NULL)
+
+    def cancel(self):
+        if self.pending():
+            event_del(&self.ev)
+            Py_DECREF(self)
+
+    @property
+    def evtype(self):
+        if self._evtype == EV_READ:
+            return READ
+        else:
+            return WRITE
+
+    def __dealloc__(self):
+        self.cancel()
 
 
-cdef void _event_cb(int fd, short evtype, void *arg) with gil:
-    (<Event>arg).callback()
+def _scheduled_call(evt, callback, args, kwargs, caller_greenlet=None):
+    try:
+        if not caller_greenlet or not caller_greenlet.dead:
+            callback(*args, **kwargs)
+    finally:
+        evt.cancel()
 
 
-cdef class Base:
+cdef class EventBase:
     cdef event_base *_base
 
-    def __cinit__(self, *args, **kwargs):
+    def __cinit__(self):
         self._base = event_base_new()
 
     def __dealloc__(self):
         event_base_free(self._base)
 
-    cdef add_event(self, event *ev):
-        return event_base_set(self._base, ev)
-
-    cdef loop(self):
+    def event_loop(self):
+        cdef int response
         with nogil:
-            event_base_loop(self._base, EVLOOP_ONCE)
+            response = event_base_loop(self._base, EVLOOP_ONCE)
+        return response
 
-    cdef loopbreak(self):
+    def abort_loop(self):
         event_base_loopbreak(self._base)
 
-
-cdef class Event:
-    cdef public int fileno
-    cdef public object evtype
-    cdef object _caller, _callback, _args, _kwargs, _hub
-    cdef int _cancelled
-    cdef event _ev
-
-    def __init__(self, hub, callback, args, kwargs, evtype, int fileno,
-                 caller, float timeout):
-        cdef timeval tv, *ptv = NULL
-        self.fileno = fileno
-        self.evtype = evtype
-        self._hub = hub
-        self._callback = callback
-        self._args = args
-        self._kwargs = kwargs
-        self._caller = caller
-        if evtype is hub.WRITE:
-            evtype = EV_WRITE
-        elif evtype is hub.READ:
-            evtype = EV_READ
-        event_set(&self._ev, fileno, evtype, _event_cb, <void *>self)
-        if timeout >= 0.0:
-            tv.tv_sec = <time_t>timeout
-            tv.tv_usec = <suseconds_t>((timeout - <time_t>timeout) * 1000000.0)
-            ptv = &tv
-        if not (<Base>hub._base).add_event(&self._ev):
-            self._cancelled = 0
-            Py_INCREF(self) # libevent base is now holding a pointer to me
-        else:
-            self._cancelled = 1
-            raise RuntimeError("Unable to add event to base.")
-        if event_add(&self._ev, ptv):
-            self.cancel()
-            raise RuntimeError("Unable to add event %s on fileno %d" % (evtype, fileno))
-        (<Base>hub._base).loopbreak()
-
-    cdef callback(self):
-        if not self._cancelled:
-            if not self._caller or not self._caller.dead:
-                try:
-                    self._callback(*self._args, **self._kwargs)
-                except BaseException:
-                    self._hub.raise_error()
-            self.cancel()
-
-    def cancel(self):
-        if not self._cancelled:
-            self._cancelled = 1
-            event_del(&self._ev)
-            Py_DECREF(self) # libevent should no longer be holding a reference
-
-    def __hash__(self):
-        return <long>&self._ev
+    def new_event(self, callback, arg=None, short evtype=0, handle=-1,
+                 seconds=None):
+        evt = Event(callback, arg, evtype, handle, seconds, self)
+        event_base_set(self._base, &evt.ev)
+        return evt
 
 
-class Hub(hub.BaseHub):
+class Hub(EventBase, BaseHub):
+
     def __init__(self):
-        super(Hub,self).__init__()
-        self._base = Base()
-        self._kbint = Event(self, self.greenlet.parent.throw,
-                (KeyboardInterrupt,), {}, EV_SIGNAL, 2, None, -1.0)
-        self._exc = None
+        super(Hub, self).__init__()
+        self._event_exc = None
+        self.signal_exc_info = None
+        self.signal(2,
+            lambda signalnum, frame: self.greenlet.parent.throw(KeyboardInterrupt))
 
     def run(self):
-        # x = self.greenlet # wtfbbq
         while True:
-            (<Base>self._base).loop()
-            if self._exc:
-                exc = self._exc
-                self._exc = None
-                if isinstance(exc[0], self.SYSTEM_EXCEPTIONS):
-                    raise tuple(exc)
-                elif isinstance(exc[0], greenlet.GreenletExit):
-                    break
-                else:
-                    self.squelch_timer_exception(None, exc)
+            try:
+                result = self.event_loop()
+                if self._event_exc is not None:
+                    t = self._event_exc
+                    self._event_exc = None
+                    raise t[0], t[1], t[2]
 
-    def raise_error(self):
-        self._exc = sys.exc_info()
-        (<Base>self._base).loopbreak()
+                if result != 0:
+                    return result
+            except greenlets.GreenletExit:
+                break
+            except self.SYSTEM_EXCEPTIONS:
+                raise
+            except:
+                if self.signal_exc_info is not None:
+                    self.schedule_call_global(
+                        0, greenlets.getcurrent().parent.throw, *self.signal_exc_info)
+                    self.signal_exc_info = None
+                else:
+                    self.squelch_timer_exception(None, sys.exc_info())
 
     def abort(self, wait=True):
-        self.schedule_call_global(0, self.greenlet.throw, greenlet.GreenletExit)
+        self.schedule_call_global(0, self.greenlet.throw, greenlets.GreenletExit)
         if wait:
-            assert self.greenlet is not greenlet.getcurrent(), \
-                "Can't abort with wait from inside the hub's greenlet"
+            assert self.greenlet is not greenlets.getcurrent(), \
+                        "Can't abort with wait from inside the hub's greenlet."
             self.switch()
-        (<Base>self._base).loopbreak()
+
+    def _getrunning(self):
+        return bool(self.greenlet)
+
+    def _setrunning(self, value):
+        pass  # exists for compatibility with BaseHub
+    running = property(_getrunning, _setrunning)
 
     def add(self, evtype, fileno, cb):
-        return Event(self, cb, (fileno,), {}, evtype, fileno, None, -1.0)
+        if evtype is READ:
+            evt = self.new_event(cb, (fileno,), EV_READ, fileno)
+            evt.add()
+        elif evtype is WRITE:
+            evt = self.new_event(cb, (fileno,), EV_WRITE, fileno)
+            evt.add()
+        # Events double as FdListener objects
+        self.listeners[evtype][fileno] = evt
+        return evt
+
+    def remove(self, listener):
+        listener.cancel()
+
+    def remove_descriptor(self, fileno):
+        for lcontainer in self.listeners.itervalues():
+            listener = lcontainer.pop(fileno, None)
+            if listener:
+                try:
+                    listener.cancel()
+                except self.SYSTEM_EXCEPTIONS:
+                    raise
+                except:
+                    traceback.print_exc()
+
+    def signal(self, signalnum, handler):
+        def wrapper():
+            try:
+                handler(signalnum, None)
+            except:
+                self.signal_exc_info = sys.exc_info()
+                self.abort_loop()
+        evt = self.new_event(wrapper, (), EV_SIGNAL | EV_PERSIST, signalnum)
+        evt.add()
+        return evt
 
     def schedule_call_local(self, seconds, cb, *args, **kwargs):
-        current = greenlet.getcurrent()
+        current = greenlets.getcurrent()
         if current is self.greenlet:
-            current = None  # actually schedule the call globally
-        return Event(self, cb, args, kwargs, EV_TIMEOUT, -1, current, seconds)
+            return self.schedule_call_global(seconds, cb, *args, **kwargs)
+        args = [None, cb, args, kwargs, current]
+        evt = self.new_event(_scheduled_call, args, seconds=seconds)
+        args[0] = evt
+        evt.add()
+        return evt
+
+    schedule_call = schedule_call_local
 
     def schedule_call_global(self, seconds, cb, *args, **kwargs):
-        return Event(self, cb, args, kwargs, EV_TIMEOUT, -1, None, seconds)
+        args = [None, cb, args, kwargs]
+        evt = self.new_event(_scheduled_call, args, seconds=seconds)
+        args[0] = evt
+        evt.add()
+        return evt
+
+    def async_exception_occurred(self):
+        self._event_exc = sys.exc_info()
 
