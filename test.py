@@ -1,7 +1,8 @@
-from eventlet import hubs, wsgi, listen, tpool, Timeout, sleep
+from eventlet import wsgi, listen, tpool, Timeout, sleep
 from eventlet.green.urllib2 import urlopen
 
-# import libeventhub
+import libeventhub
+libeventhub.use()
 
 
 def read_somethingelse():
@@ -19,6 +20,5 @@ def hello_world(env, start_response):
     return [content]
 
 
-# hubs.use_hub(libeventhub)
 wsgi.server(listen(('', 8090)), hello_world)
 

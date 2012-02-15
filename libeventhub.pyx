@@ -3,6 +3,7 @@ import traceback
 
 from eventlet.support import greenlets
 from eventlet.hubs.hub import BaseHub, READ, WRITE
+import eventlet.hubs
 
 
 cdef extern from "Python.h":
@@ -240,3 +241,5 @@ class Hub(EventBase, BaseHub):
     def async_exception_occurred(self):
         self._event_exc = sys.exc_info()
 
+def use():
+    eventlet.hubs.use_hub(Hub)
