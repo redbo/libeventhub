@@ -5,6 +5,7 @@ from eventlet.support import greenlets
 from eventlet.hubs.hub import BaseHub, READ, WRITE
 import eventlet.hubs
 
+__version__ = '0.1'
 
 cdef extern from "Python.h":
     void Py_INCREF(object)
